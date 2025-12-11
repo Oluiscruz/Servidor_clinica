@@ -4,7 +4,7 @@ const mysql = require('mysql2/promise');
 const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3001;
 
 const dbConfig = {
     host: 'localhost',
@@ -32,10 +32,10 @@ async function getConnection() {
 
 // Rota de cadastro médico
 app.post('/api/medico/cadastro', async (req, res) => {
-    const { nome, telefone, sexo, crm, email, senha_medico } = req.body;
-    
+    const { nome, telefone, sexo, crm, email, senha_medico, especialidade } = req.body;
 
-    if (!senha_medico || !email || !crm || !nome || !telefone || !sexo) {
+
+    if (!senha_medico || !email || !crm || !nome || !telefone || !sexo || !especialidade) {
         return res.status(400).json({ message: 'Todos os campos são obrigatórios.' })
     }
 
@@ -50,8 +50,8 @@ app.post('/api/medico/cadastro', async (req, res) => {
 
         // Inserir o médico no banco de dados
         const [result] = await connection.execute(
-            'INSERT INTO Medico (nome, telefone, sexo, crm, email, senha_medico) VALUES (?, ?, ?, ?, ?, ?)',
-            [nome, telefone, sexo, crm, email, hashedPassword]
+            'INSERT INTO Medico (nome, telefone, sexo, crm, email, senha_medico, especialidade) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [nome, telefone, sexo, crm, email, hashedPassword, especialidade]
         );
 
         res.status(201).json({
@@ -116,8 +116,18 @@ app.post('/api/paciente/cadastro', async (req, res) => {
 app.post('/api/login/medico', async (req, res) => {
     const { email, password } = req.body;
 
+    // Log de depuração: mostra se o corpo chegou corretamente (não exibe a senha em claro)
+    try {
+        const receivedKeys = req.body && typeof req.body === 'object' ? Object.keys(req.body) : [];
+        console.log('🔔 /api/login/medico recebido keys:', receivedKeys);
+        console.log('🔔 /api/login/medico email presente:', !!email);
+    } catch (logErr) {
+        console.warn('Falha ao logar corpo do request:', logErr);
+    }
+
     if (!email || !password) {
-        return res.status(400).json({ message: 'Email e senha são obrigatórios.' })
+        console.warn('/api/login/medico - campos ausentes. Body keys:', Object.keys(req.body || {}));
+        return res.status(400).json({ message: 'Informe um email ou senha.' })
     };
 
     var connection;
@@ -126,7 +136,7 @@ app.post('/api/login/medico', async (req, res) => {
 
         // Buscar o médico pelo email
         const [rows] = await connection.execute(
-            'SELECT id_medico, nome, email, senha_medico FROM Medico WHERE email = ?',
+            'SELECT id_medico, nome, email, senha_medico, crm FROM Medico WHERE email = ?',
             [email]
         );
 
@@ -159,17 +169,27 @@ app.post('/api/login/medico', async (req, res) => {
 app.post('/api/login/paciente', async (req, res) => {
     const { email, password } = req.body;
 
+    // Log de depuração: mostra se o corpo chegou corretamente (não exibe a senha em claro)
+    try {
+        const receivedKeys = req.body && typeof req.body === 'object' ? Object.keys(req.body) : [];
+        console.log('🔔 /api/login/paciente recebido keys:', receivedKeys);
+        console.log('🔔 /api/login/paciente email presente:', !!email);
+    } catch (logErr) {
+        console.warn('Falha ao logar corpo do request:', logErr);
+    }
+
     if (!email || !password) {
-        return res.status(400).json({ message: 'Email e Senha são obrigatórios.' });
+        console.warn('/api/login/paciente - campos ausentes. Body keys:', Object.keys(req.body || {}));
+        return res.status(400).json({ message: 'Por favor, informe um email e senha' });
     }
 
     let connection;
     try {
         connection = await getConnection();
 
-        // 1. Buscar o paciente pelo email
+        // 1. Buscar o paciente pelo email ou CPF
         const [rows] = await connection.execute(
-            'SELECT id_paciente, nome, email, senha_paciente FROM Paciente WHERE email = ?',
+            'SELECT id_paciente, nome, email, senha_paciente, cpf FROM Paciente WHERE email = ?',
             [email]
         );
 
@@ -203,9 +223,110 @@ app.post('/api/login/paciente', async (req, res) => {
 
 // Rota Principal (Health Check)
 app.get('/', (req, res) => {
-    res.send('API da Clínica está rodando! Acesse as rotas /api/register/* e /api/login/*');
+    res.send('API da Clínica está rodando! Acesse as rotas /api/cadastro/* e /api/login/*');
 });
 
+// Rota para listar médicos no Select do dashboard de pacientes.
+// O frontend solicita `/api/medicos` (plural), então expomos essa rota.
+app.get('/api/medicos', async (req, res) => {
+    let connection;
+    try {
+        connection = await getConnection();
+        // O código abaixo faz uma busca por ID, nome e especialidade para preencher o formulário;
+        const [rows] = await connection.execute(
+            'SELECT id_medico, nome, especialidade FROM Medico'
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Erro ao buscar médicos', error);
+        res.status(500).json({ message: 'Erro ao buscar médicos' })
+    } finally {
+        if (connection) connection.end();
+    }
+});
+
+// Mantemos também a rota singular como alias caso algum cliente ainda use `/api/medico`.
+app.get('/api/medico', async (req, res) => {
+    let connection;
+    try {
+        connection = await getConnection();
+        const [rows] = await connection.execute(
+            'SELECT id_medico, nome, especialidade FROM Medico'
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Erro ao buscar médicos (alias)', error);
+        res.status(500).json({ message: 'Erro ao buscar médicos' })
+    } finally {
+        if (connection) connection.end();
+    }
+});
+
+// Rota para agendar consulta:
+app.post('/api/agendar', async (req, res) => {
+    const { id_medico, id_paciente, data_horario } = req.body;
+
+    if (!id_medico || !id_paciente || !data_horario) {
+        return res.status(400).json({ message: 'Dados incompletos para agendamento.' })
+    }
+
+    let connection;
+    try {
+        connection = await getConnection();
+
+        // O código abaixo verifica se o médico já possui horário agendado.
+        const [existente] = await connection.execute(
+            'SELECT * FROM Consulta WHERE id_medico = ? AND data_consulta = ?',
+            [id_medico, data_horario]
+        );
+
+        if (existente.length > 0) {
+            return res.status(409).json({ message: 'Horário indisponível para este médico.' })
+        }
+
+        // Insere na tabela consulta:
+        await connection.execute(
+            'INSERT INTO Consulta (id_medico, id_paciente, data_consulta) VALUES (?, ?, ?)',
+            [id_medico, id_paciente, data_horario]
+        );
+
+        res.status(201).json({ message: 'Consulta agendada com sucesso!' })
+    } catch (error) {
+        console.error('Erro ao agendar consulta', error);
+        res.status(500).json({ message: 'Erro interno ao agendar consulta' })
+
+    } finally {
+        if (connection) connection.end();
+    }
+});
+
+// Rota para listar consultas de um paciente (por id)
+app.get('/api/consultas/paciente/:id', async (req, res) => {
+    const idPaciente = req.params.id;
+    if (!idPaciente) return res.status(400).json({ message: 'ID do paciente é obrigatório.' });
+
+    let connection;
+    try {
+        connection = await getConnection();
+
+        // Busca consultas com nome do médico e especialidade
+        const [rows] = await connection.execute(
+            `SELECT c.id_consulta, c.data_consulta, c.diagnostico, m.id_medico, m.nome AS medico_nome, m.especialidade
+             FROM Consulta c
+             JOIN Medico m ON c.id_medico = m.id_medico
+             WHERE c.id_paciente = ?
+             ORDER BY c.data_consulta ASC`,
+            [idPaciente]
+        );
+
+        res.json(rows);
+    } catch (error) {
+        console.error('Erro ao buscar consultas do paciente', error);
+        res.status(500).json({ message: 'Erro ao buscar consultas' });
+    } finally {
+        if (connection) connection.end();
+    }
+});
 
 // Iniciar o servidor
 app.listen(PORT, () => {

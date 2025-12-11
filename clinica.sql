@@ -8,6 +8,7 @@ CREATE TABLE
         nome varchar(50) NOT NULL,
         email varchar(255) NOT NULL,
         telefone varchar(20) NOT NULL,
+        especialidade varchar(255) NOT NULL,
         senha_medico varchar(255) NOT NULL UNIQUE,
         data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
