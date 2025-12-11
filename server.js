@@ -328,12 +328,39 @@ app.get('/api/consultas/paciente/:id', async (req, res) => {
     }
 });
 
+// Rota para deletar uma consulta por id
+app.delete('/api/consultas/paciente/:id', async (req, res) => {
+    const idConsulta = req.params.id;
+    if (!idConsulta) return res.status(400).json({ message: 'ID da consulta é obrigatório.' });
+
+    let connection;
+    try {
+        connection = await getConnection();
+
+        const [result] = await connection.execute(
+            'DELETE FROM Consulta WHERE id_consulta = ?',
+            [idConsulta]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Consulta não encontrada.' });
+        }
+
+        res.json({ message: 'Consulta deletada com sucesso.' });
+    } catch (error) {
+        console.error('Erro ao deletar consulta', error);
+        res.status(500).json({ message: 'Erro ao deletar consulta' });
+    } finally {
+        if (connection) connection.end();
+    }
+});
+
+
 // Iniciar o servidor
 app.listen(PORT, () => {
     console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 
     getConnection().catch(err => {
         console.warn('Servidor iniciado, mas a conexão inicial com o banco falhou.');
-        console.warn('Verifique as credenciais em server.js e se o MySQL está ativo.');
     });
 });
